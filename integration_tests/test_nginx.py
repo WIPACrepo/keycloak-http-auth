@@ -155,7 +155,7 @@ def nginx(tmp_path_factory, fake_server):
         # wait for server to come up
         for i in range(10):
             try:
-                socket.create_connection(('localhost', nginx_port), 0.1)
+                socket.create_connection(('127.0.0.1', nginx_port), 0.1)
             except ConnectionRefusedError:
                 if i >= 9:
                     raise
