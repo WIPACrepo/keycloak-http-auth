@@ -149,11 +149,11 @@ def nginx(tmp_path_factory, fake_server):
 
     nginx_config.write_text(config.format(nginx_port=nginx_port, app_port=app_port, timeout=1))
 
-    with subprocess.Popen(['docker', 'run', '--rm', '-i', '-t', '--network=host', '--name', 'test_nginx_integration',
+    with subprocess.Popen(['docker', 'run', '--rm', '--network=host', '--name', 'test_nginx_integration',
                            '-v', f'{nginx_config}:/etc/nginx/custom.conf:ro',
                            '-v', f'{test_volume}:/mnt/data:rw', 'wipac/keycloak-http-auth:testing']) as p:
         # wait for server to come up
-        for i in range(10):
+        for i in range(50):
             try:
                 socket.create_connection(('127.0.0.1', nginx_port), 0.1)
             except ConnectionRefusedError:
