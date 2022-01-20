@@ -4,6 +4,7 @@ import http.server
 from threading import Thread
 import socket
 import time
+import shutil
 
 import pytest
 import requests
@@ -20,91 +21,6 @@ def port():
     ephemeral_port = addr[1]
     s.close()
     return ephemeral_port
-
-config = """
-user                    root;
-worker_processes        1;
-load_module             modules/ngx_http_fancyindex_module.so;
-load_module             modules/ngx_http_dav_ext_module.so;
-load_module             modules/ndk_http_module.so;
-load_module             modules/ngx_http_lua_module.so;
-error_log               /var/log/nginx/error.log warn;
-pid                     /var/run/nginx.pid;
-events {{
-    worker_connections  1024;
-}}
-http {{
-    sendfile            on;
-    keepalive_timeout   65;
-    gzip                on;
-    server {{
-      listen 0.0.0.0:{nginx_port};
-      server_name "{dns}";
-      port_in_redirect off;
-      absolute_redirect off;
-      root /mnt;
-      index index.html;
-      # Set the maximum size of uploads
-      client_max_body_size 20000m;
-      # Default is 60, May need to be increased for very large uploads
-      client_body_timeout 3600s;
-      location /auth {{
-        internal;
-        proxy_pass              http://127.0.0.1:{app_port}/;
-        proxy_pass_request_body off;
-        proxy_connect_timeout   {timeout}s;
-        proxy_read_timeout      {timeout}s;
-        proxy_send_timeout      {timeout}s;
-        proxy_set_header        Content-Length "";
-        proxy_set_header        X-Original-URI $request_uri;
-        proxy_set_header        X-Original-Method $request_method;
-      }}
-      location /tmp {{
-        internal;
-      }}
-      location / {{
-        fancyindex              on;
-        fancyindex_exact_size   off;
-        alias                   /mnt/;
-        client_body_temp_path   /mnt/tmp;
-        # webdav setup
-        dav_methods             PUT DELETE MKCOL COPY MOVE;
-        dav_ext_methods         PROPFIND OPTIONS;
-        create_full_put_path    on;
-        dav_access              group:rw all:r;
-        # auth subrequest
-        auth_request            /auth;
-        auth_request_set        $auth_status $upstream_status;
-        auth_request_set        $saved_remote_user $upstream_http_REMOTE_USER;
-        auth_request_set        $saved_remote_uid $upstream_http_X_UID;
-        auth_request_set        $saved_remote_gid $upstream_http_X_GID;
-        # impersonation
-        access_by_lua_block {{
-          local syscall_api = require 'syscall'
-          local ffi = require "ffi"
-          local nr = require("syscall.linux.nr")
-          local sys = nr.SYS
-          local uint = ffi.typeof("unsigned int")
-          local syscall_long = ffi.C.syscall -- returns long
-          local function syscall(...) return tonumber(syscall_long(...)) end
-          local function setfsuid(id) return syscall(sys.setfsuid, uint(id)) end
-          local function setfsgid(id) return syscall(sys.setfsgid, uint(id)) end
-          local new_uid = tonumber(ngx.var.saved_remote_uid)
-          local new_gid = tonumber(ngx.var.saved_remote_gid)
-          ngx.log(ngx.NOTICE, "[Impersonating User " .. new_uid .. ":" .. new_gid .. "]")
-          local previous_uid = setfsuid(new_uid)
-          local actual_uid = setfsuid(new_uid)
-          local previous_gid = setfsgid(new_gid)
-          local actual_gid = setfsgid(new_gid)
-          if actual_uid ~= new_uid or actual_gid ~= new_gid then
-            ngx.log(ngx.CRIT, "Unable to impersonate users")
-            ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-          end
-        }}
-      }}
-    }}
-}}
-"""
 
 config = """
 listen 0.0.0.0:{nginx_port};
@@ -149,7 +65,7 @@ def nginx(tmp_path_factory, fake_server):
 
     nginx_config.write_text(config.format(nginx_port=nginx_port, app_port=app_port, timeout=1))
 
-    with subprocess.Popen(['docker', 'run', '--rm', '-i', '-t', '--network=host', '--name', 'test_nginx_integration',
+    with subprocess.Popen(['docker', 'run', '--rm', '--network=host', '--name', 'test_nginx_integration',
                            '-v', f'{nginx_config}:/etc/nginx/custom.conf:ro',
                            '-v', f'{test_volume}:/mnt/data:rw', 'wipac/keycloak-http-auth:testing']) as p:
         # wait for server to come up
@@ -175,6 +91,13 @@ def nginx(tmp_path_factory, fake_server):
         finally:
             p.terminate()
 
+@pytest.fixture(autouse=True)
+def clear_test_volume(nginx):
+    for child in nginx['data'].iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
 def test_missing(nginx):
     r = requests.get(f'http://localhost:{nginx["nginx_port"]}/missing')
@@ -186,17 +109,63 @@ def test_read(nginx):
     (nginx["data"] / "test").write_bytes(data)
 
     r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
-    assert r.status_code == 200
+    r.raise_for_status()
     assert r.content == data
+
+def test_read_bad_perms(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o777)
+    (nginx["data"] / "test").write_bytes(data)
+    (nginx["data"] / "test").chmod(0x700)
+
+    r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
+    with pytest.raises(Exception):
+        r.raise_for_status()
 
 def test_write(nginx):
     data = b'foo bar baz'
     nginx["data"].chmod(0o777)
 
     r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
-    assert r.status_code == 204
+    r.raise_for_status()
 
     f = (nginx["data"] / "test")
     assert f.read_bytes() == data
+    out = nginx['exec_in_container']('stat','-c','%u %g','/mnt/data/test')
+    assert out.strip() == b'123 456'
+
+def test_write_bad_perms(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o555)
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
+    with pytest.raises(Exception):
+        r.raise_for_status()
+
+    f = (nginx["data"] / "test")
+    assert not f.exists()
+
+def test_delete(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o777)
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
+    r.raise_for_status()
+
+    r = requests.delete(f'http://localhost:{nginx["nginx_port"]}/data/test')
+    r.raise_for_status()
+
+    f = (nginx["data"] / "test")
+    assert not f.exists()
+
+def test_mkdir(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o777)
+
+    r = requests.request('MKCOL', f'http://localhost:{nginx["nginx_port"]}/data/test/')
+    r.raise_for_status()
+
+    f = (nginx["data"] / "test")
+    assert f.is_dir()
     out = nginx['exec_in_container']('stat','-c','%u %g','/mnt/data/test')
     assert out.strip() == b'123 456'
