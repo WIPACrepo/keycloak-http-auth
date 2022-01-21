@@ -36,6 +36,15 @@ location /auth {{
 }}
 """
 
+config_health = """
+server {{
+  listen 0.0.0.0:{health_port};
+  location = /basic_status {{
+    stub_status;
+  }}
+}}
+"""
+
 @pytest.fixture(scope="session")
 def fake_server():
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -60,13 +69,17 @@ def nginx(tmp_path_factory, fake_server):
 
     test_volume = tmp_path_factory.mktemp('cache')
     nginx_config = tmp_path_factory.mktemp('conf') / 'config.conf'
+    nginx_health_config = tmp_path_factory.mktemp('conf') / 'health.conf'
     nginx_port = port()
+    health_port = port()
     app_port = fake_server
 
     nginx_config.write_text(config.format(nginx_port=nginx_port, app_port=app_port, timeout=1))
+    nginx_health_config.write_text(config_health.format(health_port=health_port))
 
     with subprocess.Popen(['docker', 'run', '--rm', '--network=host', '--name', 'test_nginx_integration',
                            '-v', f'{nginx_config}:/etc/nginx/custom/webdav.conf:ro',
+                           '-v', f'{nginx_health_config}:/etc/nginx/sites-enabled/health.conf:ro',
                            '-v', f'{test_volume}:/mnt/data:rw', 'wipac/keycloak-http-auth:testing']) as p:
         # wait for server to come up
         for i in range(10):
@@ -85,6 +98,7 @@ def nginx(tmp_path_factory, fake_server):
             yield {
                 'data': test_volume,
                 'nginx_port': nginx_port,
+                'health_port': health_port,
                 'app_port': app_port,
                 'exec_in_container': fn,
             }
@@ -98,6 +112,15 @@ def clear_test_volume(nginx):
             shutil.rmtree(child)
         else:
             child.unlink()
+
+def test_health(nginx):
+    r = requests.get(f'http://localhost:{nginx["health_port"]}/basic_status')
+    assert r.status_code == 200
+    assert 'Active connections' in r.text
+
+def test_index(nginx):
+    r = requests.get(f'http://localhost:{nginx["nginx_port"]}/')
+    assert r.status_code == 200
 
 def test_missing(nginx):
     r = requests.get(f'http://localhost:{nginx["nginx_port"]}/missing')
