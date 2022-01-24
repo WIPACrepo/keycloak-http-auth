@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from rest_tools.server import from_environment
+from rest_tools.utils import from_environment
 
 from .server import create_server
 
