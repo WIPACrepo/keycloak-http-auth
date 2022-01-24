@@ -53,7 +53,7 @@ jobs:
       uses: docker/build-push-action@v2
       with:
         context: .
-        file: Dockerfile
+        file: Dockerfile_nginx
         builder: ${{ steps.buildx.outputs.name }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache
