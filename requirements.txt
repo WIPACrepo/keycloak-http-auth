@@ -5,4 +5,4 @@ pytest-asyncio
 pytest-mock
 coverage
 flake8
--e git+https://github.com/WIPACrepo/rest-tools@v1.2.2#egg=rest_tools
+-e git+https://github.com/WIPACrepo/rest-tools@v1.2.4#egg=rest_tools
