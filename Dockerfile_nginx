@@ -20,4 +20,7 @@ COPY nginx_default.conf /etc/nginx/nginx.conf
 # override this for customization (listen port, auth proxy)
 COPY nginx_config.conf /etc/nginx/custom/webdav.conf
 
+# set umask
+RUN echo "umask 002" >> /opt/bitnami/scripts/libnginx.sh
+
 CMD ["nginx"]
