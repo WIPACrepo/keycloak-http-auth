@@ -21,7 +21,7 @@ def port():
     s.close()
     return ephemeral_port
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def server(monkeypatch, port, make_token, gen_jwk):
     monkeypatch.setenv('DEBUG', 'True')
     monkeypatch.setenv('PORT', str(port))
