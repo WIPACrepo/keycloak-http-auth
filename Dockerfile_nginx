@@ -20,4 +20,10 @@ COPY nginx_default.conf /etc/nginx/nginx.conf
 # override this for customization (listen port, auth proxy)
 COPY nginx_config.conf /etc/nginx/custom/webdav.conf
 
+# set umask
+RUN echo '#!/bin/sh\numask 002\nexec $@' >> /opt/entrypoint.sh && \
+    chmod +x /opt/entrypoint.sh
+
+ENTRYPOINT ["/opt/entrypoint.sh"]
+
 CMD ["nginx"]

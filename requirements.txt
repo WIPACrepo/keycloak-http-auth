@@ -3,6 +3,7 @@ cryptography
 pytest
 pytest-asyncio
 pytest-mock
+requests-mock
 coverage
 flake8
--e git+https://github.com/WIPACrepo/rest-tools@v1.2.5#egg=rest_tools
+wipac-rest-tools
