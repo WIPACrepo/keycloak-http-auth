@@ -5,6 +5,7 @@ import pytest
 from requests.exceptions import HTTPError
 from rest_tools.client import AsyncSession
 import requests_mock
+import pytest_asyncio
 
 from keycloak_http_auth.server import create_server
 
