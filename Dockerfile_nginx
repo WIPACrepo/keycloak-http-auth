@@ -21,6 +21,9 @@ COPY nginx_default.conf /etc/nginx/nginx.conf
 COPY nginx_config.conf /etc/nginx/custom/webdav.conf
 
 # set umask
-RUN echo "umask 002" >> /opt/bitnami/scripts/libnginx.sh
+RUN echo '#!/bin/sh\numask 002\nexec $@' >> /opt/entrypoint.sh && \
+    chmod +x /opt/entrypoint.sh
+
+ENTRYPOINT ["/opt/entrypoint.sh"]
 
 CMD ["nginx"]
