@@ -3,7 +3,6 @@ Server for keycloak token http auth
 """
 
 import logging
-from pathlib import Path
 
 from tornado.web import HTTPError
 from rest_tools.server import RestServer, RestHandler, RestHandlerSetup, authenticated, catch_error
