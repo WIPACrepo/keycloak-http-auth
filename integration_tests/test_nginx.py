@@ -1,12 +1,13 @@
-import subprocess
-from pathlib import Path
 import http.server
-from threading import Thread
+import logging
 import os
+from pathlib import Path
+import shutil
 import socket
 import stat
+import subprocess
+from threading import Thread
 import time
-import shutil
 
 import pytest
 import requests
@@ -109,13 +110,22 @@ def nginx(tmp_path_factory, fake_server):
             p.terminate()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope='function')
 def clear_test_volume(nginx):
-    for child in nginx['data'].iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
+    nginx["data"].chmod(0o777)
+    try:
+        uid, gid = (int(x) for x in nginx['exec_in_container']('stat','-c','%u %g','/mnt/data').split())
+        logging.info(f'uid:gid starts as {uid}:{gid}')
+        yield
+    finally:
+        logging.info('cleaning dir')
+        nginx['exec_in_container']('chown', '-R', f'{uid}:{gid}', '/mnt/data')
+        for child in nginx['data'].iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        logging.debug('ls: %r', nginx['exec_in_container']('ls','-al','/mnt/data'))
 
 def test_health(nginx):
     r = requests.get(f'http://localhost:{nginx["health_port"]}/basic_status')
@@ -165,7 +175,7 @@ def test_read_bad_group(nginx):
     nginx["data"].chmod(0o777)
     (nginx["data"] / "test").write_bytes(data)
     (nginx["data"] / "test").chmod(0o660)
-    nginx['exec_in_container']('chgrp','12345','/mnt/data')
+    nginx['exec_in_container']('chgrp','12345','/mnt/data/test')
 
     r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
     with pytest.raises(Exception):
@@ -233,7 +243,7 @@ def test_write_subdir(nginx):
 def test_write_bad_group(nginx):
     data = b'foo bar baz'
     nginx["data"].chmod(0o770)
-    nginx['exec_in_container']('chgrp','12345','/mnt/data')
+    nginx['exec_in_container']('chown','12345:12345','/mnt/data')
     out = nginx['exec_in_container']('stat','-c','%A','/mnt/data')
     assert out.strip() == b'drwxrwx---'
 
@@ -241,8 +251,11 @@ def test_write_bad_group(nginx):
     with pytest.raises(Exception):
         r.raise_for_status()
 
-    f = (nginx["data"] / "test")
-    assert not f.exists()
+    with pytest.raises(Exception):
+        out = nginx['exec_in_container']('stat','/mnt/data/test')
+        logging.warning('stat output: %r', out)
+    #f = (nginx["data"] / "test")
+    #assert not f.exists()
 
 def test_write_bad_perms(nginx):
     data = b'foo bar baz'
