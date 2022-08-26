@@ -1,10 +1,13 @@
-import subprocess
-from pathlib import Path
 import http.server
-from threading import Thread
-import socket
-import time
+import logging
+import os
+from pathlib import Path
 import shutil
+import socket
+import stat
+import subprocess
+from threading import Thread
+import time
 
 import pytest
 import requests
@@ -53,6 +56,7 @@ def fake_server():
             self.send_header('REMOTE_USER', 'user')
             self.send_header('X_UID', '123')
             self.send_header('X_GID', '456')
+            self.send_header('X_GROUPS', '456,789')
             self.end_headers()
             self.wfile.write(b'\r\n')
     app_port = port()
@@ -105,13 +109,23 @@ def nginx(tmp_path_factory, fake_server):
         finally:
             p.terminate()
 
-@pytest.fixture(autouse=True)
+
+@pytest.fixture(autouse=True, scope='function')
 def clear_test_volume(nginx):
-    for child in nginx['data'].iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
+    nginx["data"].chmod(0o777)
+    try:
+        uid, gid = (int(x) for x in nginx['exec_in_container']('stat','-c','%u %g','/mnt/data').split())
+        logging.info(f'uid:gid starts as {uid}:{gid}')
+        yield
+    finally:
+        logging.info('cleaning dir')
+        nginx['exec_in_container']('chown', '-R', f'{uid}:{gid}', '/mnt/data')
+        for child in nginx['data'].iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        logging.debug('ls: %r', nginx['exec_in_container']('ls','-al','/mnt/data'))
 
 def test_health(nginx):
     r = requests.get(f'http://localhost:{nginx["health_port"]}/basic_status')
@@ -139,7 +153,29 @@ def test_read_bad_perms(nginx):
     data = b'foo bar baz'
     nginx["data"].chmod(0o777)
     (nginx["data"] / "test").write_bytes(data)
-    (nginx["data"] / "test").chmod(0x700)
+    (nginx["data"] / "test").chmod(0o600)
+
+    r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
+    with pytest.raises(Exception):
+        r.raise_for_status()
+
+def test_read_group(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o777)
+    (nginx["data"] / "test").write_bytes(data)
+    (nginx["data"] / "test").chmod(0o660)
+    nginx['exec_in_container']('chgrp','789','/mnt/data/test')
+
+    r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
+    r.raise_for_status()
+    assert r.content == data
+
+def test_read_bad_group(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o777)
+    (nginx["data"] / "test").write_bytes(data)
+    (nginx["data"] / "test").chmod(0o660)
+    nginx['exec_in_container']('chgrp','12345','/mnt/data/test')
 
     r = requests.get(f'http://localhost:{nginx["nginx_port"]}/data/test')
     with pytest.raises(Exception):
@@ -152,10 +188,74 @@ def test_write(nginx):
     r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
     r.raise_for_status()
 
-    f = (nginx["data"] / "test")
-    assert f.read_bytes() == data
+    out = nginx['exec_in_container']('cat', '/mnt/data/test')
+    assert out == data
     out = nginx['exec_in_container']('stat','-c','%u %g','/mnt/data/test')
     assert out.strip() == b'123 456'
+
+def test_write_group(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o770)
+    nginx['exec_in_container']('chgrp','789','/mnt/data')
+    out = nginx['exec_in_container']('stat','-c','%A','/mnt/data')
+    assert out.strip() == b'drwxrwx---'
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
+    r.raise_for_status()
+
+    out = nginx['exec_in_container']('cat', '/mnt/data/test')
+    assert out == data
+    out = nginx['exec_in_container']('stat','-c','%A %u %g','/mnt/data/test')
+    assert out.strip() == b'-rw-rw---- 123 456'
+
+def test_write_group_sticky(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o770)
+    nginx['exec_in_container']('chgrp','789','/mnt/data')
+    nginx['exec_in_container']('chmod','g+s','/mnt/data')
+    out = nginx['exec_in_container']('stat','-c','%A','/mnt/data')
+    assert out.strip() == b'drwxrws---'
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
+    r.raise_for_status()
+
+    out = nginx['exec_in_container']('cat', '/mnt/data/test')
+    assert out == data
+    out = nginx['exec_in_container']('stat','-c','%A %u %g','/mnt/data/test')
+    assert out.strip() == b'-rw-rw---- 123 789'
+
+def test_write_subdir(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o770)
+    nginx['exec_in_container']('chgrp','789','/mnt/data')
+    nginx['exec_in_container']('chmod','g+s','/mnt/data')
+    out = nginx['exec_in_container']('stat','-c','%A','/mnt/data')
+    assert out.strip() == b'drwxrws---'
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/sub1/sub2/test', data=data)
+    r.raise_for_status()
+
+    out = nginx['exec_in_container']('cat', '/mnt/data/sub1/sub2/test')
+    assert out == data
+    out = nginx['exec_in_container']('stat','-c','%A %u %g','/mnt/data/sub1/sub2/test')
+    assert out.strip() == b'-rw-rw---- 123 789'
+
+def test_write_bad_group(nginx):
+    data = b'foo bar baz'
+    nginx["data"].chmod(0o770)
+    nginx['exec_in_container']('chown','12345:12345','/mnt/data')
+    out = nginx['exec_in_container']('stat','-c','%A','/mnt/data')
+    assert out.strip() == b'drwxrwx---'
+
+    r = requests.put(f'http://localhost:{nginx["nginx_port"]}/data/test', data=data)
+    with pytest.raises(Exception):
+        r.raise_for_status()
+
+    with pytest.raises(Exception):
+        out = nginx['exec_in_container']('stat','/mnt/data/test')
+        logging.warning('stat output: %r', out)
+    #f = (nginx["data"] / "test")
+    #assert not f.exists()
 
 def test_write_bad_perms(nginx):
     data = b'foo bar baz'

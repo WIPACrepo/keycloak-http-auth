@@ -1,15 +1,14 @@
 FROM python:3.9
 
-RUN useradd -m -U app
-
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-WORKDIR /home/app
-USER app
+RUN mkdir -p /opt/app && mkdir -p /mnt/data
+
+WORKDIR /opt/app
 
 COPY . .
 
-ENV PYTHONPATH=/home/app
+ENV PYTHONPATH=/opt/app
 
 CMD ["python", "-m", "keycloak_http_auth"]
