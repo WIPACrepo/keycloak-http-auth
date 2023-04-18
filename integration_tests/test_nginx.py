@@ -292,3 +292,9 @@ def test_mkdir(nginx):
     assert f.is_dir()
     out = nginx['exec_in_container']('stat','-c','%u %g','/mnt/data/test')
     assert out.strip() == b'123 456'
+
+def test_bad_methods(nginx):
+    data = b'foo bar baz'
+    for m in ('POST', 'PATCH'):
+        r = requests.request(m, f'http://localhost:{nginx["nginx_port"]}/data/test/', data=data)
+        assert r.status_code == 405
