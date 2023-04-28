@@ -15,10 +15,11 @@ RUN ln -sf /dev/stdout /var/log/nginx/access.log && \
 RUN rm /etc/nginx/sites-enabled/default
 
 # copy in new default config
-COPY nginx_default.conf /etc/nginx/nginx.conf
+COPY nginx_config/nginx_default.conf /etc/nginx/nginx.conf
 
-# override this for customization (listen port, auth proxy)
-COPY nginx_config.conf /etc/nginx/custom/webdav.conf
+# override this for customization (listen port, auth proxy, health)
+COPY nginx_config/auth.conf /etc/nginx/custom/auth.conf
+COPY nginx_config/health.conf /etc/nginx/sites-enabled/health.conf
 
 # set umask
 RUN echo '#!/bin/sh\numask 002\nexec $@' >> /opt/entrypoint.sh && \
