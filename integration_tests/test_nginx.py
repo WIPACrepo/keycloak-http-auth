@@ -82,7 +82,7 @@ def nginx(tmp_path_factory, fake_server):
     nginx_health_config.write_text(config_health.format(health_port=health_port))
 
     with subprocess.Popen(['docker', 'run', '--rm', '--network=host', '--name', 'test_nginx_integration',
-                           '-v', f'{nginx_config}:/etc/nginx/custom/webdav.conf:ro',
+                           '-v', f'{nginx_config}:/etc/nginx/custom/auth.conf:ro',
                            '-v', f'{nginx_health_config}:/etc/nginx/sites-enabled/health.conf:ro',
                            '-v', f'{test_volume}:/mnt/data:rw', 'wipac/keycloak-http-auth:testing']) as p:
         # wait for server to come up

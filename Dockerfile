@@ -7,7 +7,7 @@ RUN mkdir -p /opt/app && mkdir -p /mnt/data
 
 WORKDIR /opt/app
 
-COPY . .
+COPY keycloak_http_auth ./
 
 ENV PYTHONPATH=/opt/app
 

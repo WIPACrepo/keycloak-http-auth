@@ -7,3 +7,4 @@ requests-mock
 coverage
 flake8
 wipac-rest-tools
+prometheus_client
